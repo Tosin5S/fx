@@ -1,7 +1,7 @@
-// Cloud Market Data Engine:
+// 100% Live Cloud Market Data Engine (No simulated or generated candles):
 // 1. Live Deriv WebSocket API (wss://ws.derivws.com/websockets/v3?app_id=1089) for Synthetics, FX, Metals & Indices
-// 2. Live Binance WebSocket (wss://stream.binance.com:9443/ws) + REST proxy (/api/candles) for Crypto, Gold & FX
-// 3. Resilient Multi-Timeframe Candle Store & Weekend/Offline Continuity Generator
+// 2. Live Binance Global Market Data API (wss://data-stream.binance.vision + https://data-api.binance.vision) for Crypto, Gold & FX
+// 3. Server-side Yahoo Finance / Binance Cloud API (/api/candles) for Commodities, Forex & Global Stock Indices
 
 window.MarketDataFeed = (function () {
   const GRANULARITY_MAP = {
@@ -14,7 +14,17 @@ window.MarketDataFeed = (function () {
     D1: 86400
   };
 
-  const candleStore = new Map(); // key: `${symbolId}_${tf}` -> { candles: [], source: string }
+  const BINANCE_TF_MAP = {
+    M1: '1m',
+    M5: '5m',
+    M15: '15m',
+    M30: '30m',
+    H1: '1h',
+    H4: '4h',
+    D1: '1d'
+  };
+
+  const candleStore = new Map(); // key: `${symbolId}_${tf}` -> { candles: [], source: string, loading: boolean, error: string|null }
   let derivSocket = null;
   let derivConnected = false;
   let binanceSocket = null;
@@ -24,97 +34,16 @@ window.MarketDataFeed = (function () {
   let onStatusCallback = null;
   let reqIdCounter = 1;
   const reqMap = new Map();
+  let derivReconnectTimer = null;
 
-  // Deterministic pseudo-random seeded by symbol + timeframe so initial charts look realistic & consistent
-  function createSeededRandom(seedStr) {
-    let h = 2166136261 >>> 0;
-    for (let i = 0; i < seedStr.length; i++) {
-      h ^= seedStr.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return function () {
-      h += 0x6D2B79F5;
-      let t = Math.imul(h ^ (h >>> 15), 1 | h);
-      t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function generateRealisticCandles(symbolMeta, tf = 'M15', count = 200) {
-    const stepSec = GRANULARITY_MAP[tf] || 900;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const startSec = nowSec - count * stepSec;
-    const rand = createSeededRandom(`${symbolMeta.id}_${tf}`);
-
-    let price = symbolMeta.basePrice;
-    const vol = symbolMeta.volatility || 0.0015;
-    const tfScale = Math.sqrt(stepSec / 900);
-    const candles = [];
-
-    // Create multi-wave trend regimes so technical indicators find realistic setups
-    let trendBias = (rand() - 0.48) * 0.18;
-    const isBoom = symbolMeta.id.startsWith('BOOM');
-    const isCrash = symbolMeta.id.startsWith('CRASH');
-    const isStep = symbolMeta.id === 'STEP_INDEX';
-
-    for (let i = 0; i < count; i++) {
-      if (i % 28 === 0) {
-        trendBias = (rand() - 0.47) * 0.25;
-      }
-      const open = price;
-      let delta = 0;
-
-      if (isBoom) {
-        // Boom indices: gradual downward drift with sharp upward spikes
-        const isSpike = rand() > 0.84;
-        delta = isSpike
-          ? open * vol * (1.8 + rand() * 2.4)
-          : -open * vol * (0.18 + rand() * 0.25);
-      } else if (isCrash) {
-        // Crash indices: gradual upward drift with sharp downward drops
-        const isDrop = rand() > 0.84;
-        delta = isDrop
-          ? -open * vol * (1.8 + rand() * 2.4)
-          : open * vol * (0.18 + rand() * 0.25);
-      } else if (isStep) {
-        // Step Index: symmetric 0.1 step movements
-        const steps = Math.round((rand() - 0.48 + trendBias * 0.2) * 8);
-        delta = steps * 0.1;
-      } else {
-        const noise = (rand() - 0.5 + trendBias * 0.35) * 2;
-        delta = open * vol * tfScale * noise;
-      }
-
-      const close = Math.max(symbolMeta.pipSize * 10, Number((open + delta).toFixed(symbolMeta.digits)));
-      const wickUp = Math.abs(open * vol * tfScale * rand() * 0.85);
-      const wickDown = Math.abs(open * vol * tfScale * rand() * 0.85);
-      const high = Number((Math.max(open, close) + (isCrash && delta > 0 ? 0 : wickUp)).toFixed(symbolMeta.digits));
-      const low = Number((Math.max(symbolMeta.pipSize, Math.min(open, close) - (isBoom && delta < 0 ? 0 : wickDown))).toFixed(symbolMeta.digits));
-
-      candles.push({
-        time: startSec + i * stepSec,
-        open,
-        high,
-        low,
-        close,
-        volume: Math.round(100 + rand() * 1400)
-      });
-      price = close;
-    }
-
-    return candles;
-  }
-
-  function ensureCandles(symbolMeta, tf = activeTimeframe) {
+  function ensureSlot(symbolMeta, tf = activeTimeframe) {
     const key = `${symbolMeta.id}_${tf}`;
     if (!candleStore.has(key)) {
       candleStore.set(key, {
-        candles: generateRealisticCandles(symbolMeta, tf, 200),
-        source: symbolMeta.derivSymbol
-          ? 'Deriv Cloud Feed'
-          : symbolMeta.binanceSymbol
-            ? 'Binance Cloud Feed'
-            : 'Yahoo / Interbank Feed'
+        candles: [],
+        source: 'Connecting to Live Feed...',
+        loading: true,
+        error: null
       });
     }
     return candleStore.get(key);
@@ -131,9 +60,15 @@ window.MarketDataFeed = (function () {
 
   function connectDerivWebSocket(symbols, tf) {
     try {
+      if (derivReconnectTimer) {
+        clearTimeout(derivReconnectTimer);
+        derivReconnectTimer = null;
+      }
       if (derivSocket && (derivSocket.readyState === WebSocket.OPEN || derivSocket.readyState === WebSocket.CONNECTING)) {
+        derivSocket.onclose = null;
         derivSocket.close();
       }
+
       derivSocket = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
 
       derivSocket.onopen = () => {
@@ -151,25 +86,39 @@ window.MarketDataFeed = (function () {
           const { symbolMeta, tf: reqTf } = reqInfo;
           const key = `${symbolMeta.id}_${reqTf}`;
 
-          if (msg.candles && Array.isArray(msg.candles) && msg.candles.length >= 25) {
+          if (msg.error) {
+            // If Deriv market is closed or symbol unavailable on Deriv, fall back to Yahoo/Binance live REST
+            if (symbolMeta.yahooSymbol || symbolMeta.binanceSymbol) {
+              fetchCloudRestCandles(symbolMeta, reqTf);
+            } else {
+              const slot = ensureSlot(symbolMeta, reqTf);
+              slot.loading = false;
+              slot.error = msg.error.message || 'Market closed';
+            }
+            return;
+          }
+
+          if (msg.candles && Array.isArray(msg.candles) && msg.candles.length >= 20) {
             const parsed = msg.candles.map(c => ({
               time: Number(c.epoch),
               open: Number(c.open),
               high: Number(c.high),
               low: Number(c.low),
               close: Number(c.close),
-              volume: 500
+              volume: 1
             }));
             candleStore.set(key, {
               candles: parsed,
-              source: 'Deriv WebSocket Live'
+              source: 'Deriv MT5 WebSocket (Live)',
+              loading: false,
+              error: null
             });
             if (typeof onTickCallback === 'function') {
               onTickCallback(symbolMeta.id, reqTf);
             }
           } else if (msg.ohlc) {
             const o = msg.ohlc;
-            const entry = ensureCandles(symbolMeta, reqTf);
+            const entry = ensureSlot(symbolMeta, reqTf);
             const list = entry.candles;
             const candleObj = {
               time: Number(o.open_time || o.epoch),
@@ -177,7 +126,7 @@ window.MarketDataFeed = (function () {
               high: Number(o.high),
               low: Number(o.low),
               close: Number(o.close),
-              volume: 650
+              volume: 1
             };
             if (list.length > 0 && list[list.length - 1].time === candleObj.time) {
               list[list.length - 1] = candleObj;
@@ -185,7 +134,9 @@ window.MarketDataFeed = (function () {
               list.push(candleObj);
               if (list.length > 220) list.shift();
             }
-            entry.source = 'Deriv WebSocket Live';
+            entry.source = 'Deriv MT5 WebSocket (Live)';
+            entry.loading = false;
+            entry.error = null;
             if (typeof onTickCallback === 'function') {
               onTickCallback(symbolMeta.id, reqTf);
             }
@@ -203,6 +154,7 @@ window.MarketDataFeed = (function () {
       derivSocket.onclose = () => {
         derivConnected = false;
         notifyStatus();
+        derivReconnectTimer = setTimeout(() => connectDerivWebSocket(symbols, activeTimeframe), 4000);
       };
     } catch (e) {
       derivConnected = false;
@@ -223,7 +175,7 @@ window.MarketDataFeed = (function () {
           derivSocket.send(JSON.stringify({
             ticks_history: sym.derivSymbol,
             adjust_start_time: 1,
-            count: 180,
+            count: 200,
             end: 'latest',
             granularity,
             style: 'candles',
@@ -231,13 +183,14 @@ window.MarketDataFeed = (function () {
             req_id: reqId
           }));
         }
-      }, index * 65);
+      }, index * 60);
     });
   }
 
   function connectBinanceStream(symbols) {
     try {
       if (binanceSocket && (binanceSocket.readyState === WebSocket.OPEN || binanceSocket.readyState === WebSocket.CONNECTING)) {
+        binanceSocket.onclose = null;
         binanceSocket.close();
       }
       const streams = symbols
@@ -246,7 +199,8 @@ window.MarketDataFeed = (function () {
         .join('/');
       if (!streams) return;
 
-      binanceSocket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+      // Use data-stream.binance.vision which works globally (including US/Render servers)
+      binanceSocket = new WebSocket(`wss://data-stream.binance.vision/stream?streams=${streams}`);
       binanceSocket.onopen = () => {
         binanceConnected = true;
         notifyStatus();
@@ -261,14 +215,14 @@ window.MarketDataFeed = (function () {
           const closePrice = parseFloat(d.c);
           if (!isFinite(closePrice)) return;
 
-          const entry = ensureCandles(sym, activeTimeframe);
+          const entry = ensureSlot(sym, activeTimeframe);
           const list = entry.candles;
           if (list.length > 0) {
             const last = list[list.length - 1];
             last.close = Number(closePrice.toFixed(sym.digits));
             if (last.close > last.high) last.high = last.close;
             if (last.close < last.low) last.low = last.close;
-            entry.source = 'Binance Live Stream';
+            entry.source = 'Binance Live WebSocket';
             if (typeof onTickCallback === 'function') {
               onTickCallback(sym.id, activeTimeframe);
             }
@@ -289,7 +243,43 @@ window.MarketDataFeed = (function () {
     }
   }
 
+  async function fetchDirectBinanceBrowser(symbolMeta, tf) {
+    if (!symbolMeta.binanceSymbol) return false;
+    try {
+      const interval = BINANCE_TF_MAP[tf] || '15m';
+      const url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(symbolMeta.binanceSymbol)}&interval=${interval}&limit=200`;
+      const res = await fetch(url);
+      if (!res.ok) return false;
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length < 20) return false;
+      const candles = rows.map(r => ({
+        time: Math.floor(Number(r[0]) / 1000),
+        open: parseFloat(r[1]),
+        high: parseFloat(r[2]),
+        low: parseFloat(r[3]),
+        close: parseFloat(r[4]),
+        volume: parseFloat(r[5])
+      }));
+      candleStore.set(`${symbolMeta.id}_${tf}`, {
+        candles,
+        source: 'Binance Spot API (Live)',
+        loading: false,
+        error: null
+      });
+      if (typeof onTickCallback === 'function') {
+        onTickCallback(symbolMeta.id, tf);
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function fetchCloudRestCandles(symbolMeta, tf) {
+    if (symbolMeta.binanceSymbol) {
+      const ok = await fetchDirectBinanceBrowser(symbolMeta, tf);
+      if (ok) return;
+    }
     if (!symbolMeta.yahooSymbol && !symbolMeta.binanceSymbol) return;
     try {
       const params = new URLSearchParams({ tf });
@@ -298,45 +288,32 @@ window.MarketDataFeed = (function () {
       const res = await fetch(`/api/candles?${params.toString()}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data.candles) && data.candles.length >= 30) {
+      if (Array.isArray(data.candles) && data.candles.length >= 20) {
         const key = `${symbolMeta.id}_${tf}`;
         candleStore.set(key, {
           candles: data.candles,
-          source: data.source || 'Cloud API'
+          source: data.source || 'Yahoo Finance Live API',
+          loading: false,
+          error: null
         });
         if (typeof onTickCallback === 'function') {
           onTickCallback(symbolMeta.id, tf);
         }
       }
     } catch (e) {
-      // Keep existing candles smoothly
+      // Keep waiting for live feed
     }
   }
 
-  function startMicroTickLoop(symbols) {
+  function startRestPollLoop(symbols) {
+    // Refresh REST-backed symbols (e.g. Yahoo Finance commodities/indices) every 30 seconds with real market data
     setInterval(() => {
-      // Keep micro-ticks moving smoothly for active instruments
-      symbols.forEach(sym => {
-        const entry = ensureCandles(sym, activeTimeframe);
-        const list = entry.candles;
-        if (!list || list.length === 0) return;
-        const last = list[list.length - 1];
-        const vol = (sym.volatility || 0.0012) * 0.09;
-        const isBoom = sym.id.startsWith('BOOM');
-        const isCrash = sym.id.startsWith('CRASH');
-        let jitter = (Math.random() - 0.495) * last.close * vol;
-        if (isBoom && Math.random() > 0.96) jitter = Math.abs(jitter) * 5;
-        if (isCrash && Math.random() > 0.96) jitter = -Math.abs(jitter) * 5;
-
-        const nextClose = Math.max(sym.pipSize * 5, Number((last.close + jitter).toFixed(sym.digits)));
-        last.close = nextClose;
-        if (nextClose > last.high) last.high = nextClose;
-        if (nextClose < last.low) last.low = nextClose;
+      symbols.forEach((sym, idx) => {
+        if (!sym.derivSymbol && (sym.yahooSymbol || sym.binanceSymbol)) {
+          setTimeout(() => fetchCloudRestCandles(sym, activeTimeframe), idx * 150);
+        }
       });
-      if (typeof onTickCallback === 'function') {
-        onTickCallback(null, activeTimeframe);
-      }
-    }, 1800);
+    }, 30000);
   }
 
   function init(symbols, initialTf, tickCb, statusCb) {
@@ -344,36 +321,35 @@ window.MarketDataFeed = (function () {
     onTickCallback = tickCb;
     onStatusCallback = statusCb;
 
-    // Seed initial candles immediately for zero-latency startup
-    symbols.forEach(sym => ensureCandles(sym, activeTimeframe));
+    symbols.forEach(sym => ensureSlot(sym, activeTimeframe));
 
     // Connect live WebSockets
     connectDerivWebSocket(symbols, activeTimeframe);
     connectBinanceStream(symbols);
 
-    // Stagger REST candle hydration for Yahoo/Binance instruments
+    // Hydrate Binance & Yahoo Finance REST candles immediately in parallel
     symbols.forEach((sym, idx) => {
       if (sym.binanceSymbol || sym.yahooSymbol) {
-        setTimeout(() => fetchCloudRestCandles(sym, activeTimeframe), idx * 140);
+        setTimeout(() => fetchCloudRestCandles(sym, activeTimeframe), idx * 80);
       }
     });
 
-    startMicroTickLoop(symbols);
+    startRestPollLoop(symbols);
   }
 
   function setTimeframe(symbols, newTf) {
     activeTimeframe = newTf;
-    symbols.forEach(sym => ensureCandles(sym, newTf));
+    symbols.forEach(sym => ensureSlot(sym, newTf));
     connectDerivWebSocket(symbols, newTf);
     symbols.forEach((sym, idx) => {
       if (sym.binanceSymbol || sym.yahooSymbol) {
-        setTimeout(() => fetchCloudRestCandles(sym, newTf), idx * 120);
+        setTimeout(() => fetchCloudRestCandles(sym, newTf), idx * 80);
       }
     });
   }
 
   function getSymbolData(symbolMeta, tf = activeTimeframe) {
-    return ensureCandles(symbolMeta, tf);
+    return ensureSlot(symbolMeta, tf);
   }
 
   return {

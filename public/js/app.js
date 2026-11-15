@@ -191,10 +191,30 @@
 
     const rowsHtml = filtered.map(sym => {
       const sig = state.signals.get(sym.id);
-      if (!sig) return '';
-      const d = sym.digits;
       const isSelected = sym.id === state.selectedSymbolId;
       const isStarred = state.watchlist.has(sym.id);
+      if (!sig) {
+        return `
+          <tr class="scanner-row ${isSelected ? 'selected-row' : ''}" data-symbol="${sym.id}">
+            <td class="star-cell" data-star="${sym.id}" title="Toggle Watchlist">
+              <span class="star-icon ${isStarred ? 'active' : ''}">${isStarred ? '★' : '☆'}</span>
+            </td>
+            <td>
+              <div class="sym-cell">
+                <div class="sym-primary">
+                  <span class="sym-ticker">${sym.id}</span>
+                  <span class="cat-pill cat-${sym.category}">${getCategoryLabel(sym.category)}</span>
+                </div>
+                <div class="sym-sub">${sym.mt5} • ${sym.name}</div>
+              </div>
+            </td>
+            <td colspan="9" class="mono-cell" style="color:var(--text-secondary);">
+              ⏳ Fetching live candles from cloud market feed...
+            </td>
+          </tr>
+        `;
+      }
+      const d = sym.digits;
       const chgClass = sig.changePct >= 0 ? 'pos' : 'neg';
       const chgSign = sig.changePct >= 0 ? '+' : '';
       const confColor = sig.side === 'BUY' ? '#10b981' : '#f43f5e';
@@ -601,9 +621,10 @@
 
         const digits = basePrice < 2 ? 5 : basePrice < 50 ? 3 : 2;
         const pipSize = digits === 5 ? 0.0001 : digits === 3 ? 0.01 : 0.1;
+        const cleanCode = code.replace(/[^A-Z0-9]/g, '');
         const newSym = {
-          id: code,
-          mt5: `${code}m`,
+          id: cleanCode,
+          mt5: `${cleanCode}m`,
           name,
           category,
           subCategory: 'Custom MT5',
@@ -612,19 +633,20 @@
           contractSize: 100,
           basePrice,
           volatility: 0.0022,
-          derivSymbol: null,
-          yahooSymbol: null,
-          binanceSymbol: null
+          derivSymbol: category === 'forex' ? `frx${cleanCode}` : null,
+          yahooSymbol: category === 'forex' ? `${cleanCode}=X` : category === 'crypto' ? `${cleanCode.replace(/USD$/, '')}-USD` : cleanCode,
+          binanceSymbol: category === 'crypto' ? `${cleanCode.replace(/USD$/, '')}USDT` : null
         };
 
-        if (!state.symbols.some(s => s.id === code)) {
+        if (!state.symbols.some(s => s.id === cleanCode)) {
           state.symbols.unshift(newSym);
           const saved = JSON.parse(localStorage.getItem('mt5_custom_symbols') || '[]');
           saved.push(newSym);
           localStorage.setItem('mt5_custom_symbols', JSON.stringify(saved));
         }
 
-        state.selectedSymbolId = code;
+        state.selectedSymbolId = cleanCode;
+        window.MarketDataFeed.fetchCloudRestCandles(newSym, state.activeTimeframe);
         recomputeAllSignals();
         renderSummaryBar();
         renderScannerTable();

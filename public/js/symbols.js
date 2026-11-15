@@ -207,7 +207,7 @@ window.MT5_SYMBOLS = [
     contractSize: 100000,
     basePrice: 174.590,
     volatility: 0.0011,
-    derivSymbol: null,
+    derivSymbol: 'frxCHFJPY',
     yahooSymbol: 'CHFJPY=X',
     binanceSymbol: null
   },
@@ -237,7 +237,7 @@ window.MT5_SYMBOLS = [
     contractSize: 100000,
     basePrice: 18.14500,
     volatility: 0.0018,
-    derivSymbol: null,
+    derivSymbol: 'frxUSDZAR',
     yahooSymbol: 'ZAR=X',
     binanceSymbol: null
   },

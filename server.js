@@ -58,30 +58,51 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 4500) {
 
 async function fetchBinanceCandles(binanceSymbol, tf = 'M15', limit = 220) {
   const interval = BINANCE_TF_MAP[tf] || '15m';
-  const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(binanceSymbol)}&interval=${interval}&limit=${limit}`;
-  const res = await fetchWithTimeout(url);
-  if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
-  const rows = await res.json();
-  if (!Array.isArray(rows) || rows.length < 20) throw new Error('Insufficient Binance klines');
-  return rows.map(r => ({
-    time: Math.floor(Number(r[0]) / 1000),
-    open: parseFloat(r[1]),
-    high: parseFloat(r[2]),
-    low: parseFloat(r[3]),
-    close: parseFloat(r[4]),
-    volume: parseFloat(r[5])
-  }));
+  const endpoints = [
+    `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(binanceSymbol)}&interval=${interval}&limit=${limit}`,
+    `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(binanceSymbol)}&interval=${interval}&limit=${limit}`
+  ];
+  let lastErr = null;
+  for (const url of endpoints) {
+    try {
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length < 20) throw new Error('Insufficient Binance klines');
+      return rows.map(r => ({
+        time: Math.floor(Number(r[0]) / 1000),
+        open: parseFloat(r[1]),
+        high: parseFloat(r[2]),
+        low: parseFloat(r[3]),
+        close: parseFloat(r[4]),
+        volume: parseFloat(r[5])
+      }));
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Binance fetch failed');
 }
 
 async function fetchYahooCandles(yahooSymbol, tf = 'M15') {
   const cfg = YAHOO_TF_MAP[tf] || YAHOO_TF_MAP.M15;
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${cfg.interval}&range=${cfg.range}`;
-  const res = await fetchWithTimeout(url);
-  if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
-  const data = await res.json();
-  const result = data?.chart?.result?.[0];
+  const hosts = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
+  let result = null;
+  let lastErr = null;
+  for (const host of hosts) {
+    try {
+      const url = `https://${host}/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${cfg.interval}&range=${cfg.range}`;
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
+      const data = await res.json();
+      result = data?.chart?.result?.[0];
+      if (result && Array.isArray(result.timestamp)) break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
   if (!result || !Array.isArray(result.timestamp)) {
-    throw new Error('Invalid Yahoo chart payload');
+    throw lastErr || new Error('Invalid Yahoo chart payload');
   }
   const timestamps = result.timestamp;
   const quote = result.indicators?.quote?.[0] || {};
