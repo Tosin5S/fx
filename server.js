@@ -207,6 +207,6 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`MT5 OmniSignal WebApp running at http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`MT5 OmniSignal WebApp running on port ${PORT}`);
 });
