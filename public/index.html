@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MT5 OmniSignal Pro — Entry & Exit Signals for Forex, Commodities, Synthetics, Crypto & Indices</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <!-- TOP NAVIGATION & CLOUD STREAM BAR -->
+  <header class="top-header">
+    <div class="brand-wrap">
+      <div class="brand-logo">MT5</div>
+      <div>
+        <div class="brand-title">MT5 OmniSignal Pro</div>
+        <div class="brand-sub">Multi-Indicator Confluence Entry &amp; Exit Terminal • All MetaTrader 5 Markets</div>
+      </div>
+    </div>
+
+    <div class="header-stats">
+      <div class="stat-pill">
+        <span class="stat-label">MT5 Symbols:</span>
+        <span class="stat-val cyan" id="statTotalSymbols">60</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">Buy Signals:</span>
+        <span class="stat-val bull" id="statBuySignals">0</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">Sell Signals:</span>
+        <span class="stat-val bear" id="statSellSignals">0</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">High Confluence (≥80%):</span>
+        <span class="stat-val cyan" id="statStrongSignals">0</span>
+      </div>
+    </div>
+
+    <div class="header-feeds">
+      <div class="feed-badge">
+        <span class="status-dot online" id="derivStatusDot"></span>
+        <span id="derivStatusText">Deriv WS: Connecting...</span>
+      </div>
+      <div class="feed-badge">
+        <span class="status-dot online" id="binanceStatusDot"></span>
+        <span id="binanceStatusText">Binance/FX: Connecting...</span>
+      </div>
+      <button class="btn-action" id="btnToggleSound" type="button">🔇 Alerts Muted</button>
+      <button class="btn-action btn-primary" id="btnAddCustomSymbol" type="button">+ Add MT5 Symbol</button>
+    </div>
+  </header>
+
+  <!-- CATEGORY TABS & TIMEFRAME SELECTOR -->
+  <section class="control-toolbar">
+    <div class="cat-tabs">
+      <button class="cat-tab-btn active" data-cat="all" type="button">All MT5 Markets (60)</button>
+      <button class="cat-tab-btn" data-cat="forex" type="button">Forex Pairs (16)</button>
+      <button class="cat-tab-btn" data-cat="commodities" type="button">Commodities &amp; Gold (8)</button>
+      <button class="cat-tab-btn" data-cat="synthetic" type="button">Synthetic Indices (20)</button>
+      <button class="cat-tab-btn" data-cat="crypto" type="button">Crypto CFDs (10)</button>
+      <button class="cat-tab-btn" data-cat="indices" type="button">Stock Indices (6)</button>
+    </div>
+
+    <div class="tf-bar">
+      <span class="tf-label">TIMEFRAME:</span>
+      <button class="tf-btn" data-tf="M1" type="button">M1</button>
+      <button class="tf-btn" data-tf="M5" type="button">M5</button>
+      <button class="tf-btn active" data-tf="M15" type="button">M15</button>
+      <button class="tf-btn" data-tf="M30" type="button">M30</button>
+      <button class="tf-btn" data-tf="H1" type="button">H1</button>
+      <button class="tf-btn" data-tf="H4" type="button">H4</button>
+      <button class="tf-btn" data-tf="D1" type="button">D1</button>
+    </div>
+  </section>
+
+  <!-- MAIN WORKSPACE -->
+  <main class="workspace-grid">
+    <!-- LEFT COLUMN: INTERACTIVE CHART + ALL-MARKET SCANNER TABLE -->
+    <div class="left-column">
+      <!-- CHART CARD -->
+      <section class="panel-card">
+        <div class="chart-header">
+          <div class="chart-sym-info">
+            <div>
+              <div class="chart-sym-title" id="chartSymbolTitle">XAUUSD (XAUUSDm)</div>
+              <div class="chart-sym-desc" id="chartSymbolDesc">Spot Gold vs US Dollar • COMMODITY</div>
+            </div>
+            <div class="chart-price-box">
+              <span class="chart-live-price" id="chartLivePrice">2684.50</span>
+              <span class="chart-change-pill pos" id="chartLiveChange">+0.42%</span>
+              <span class="sig-badge strong-buy" id="chartSignalBadge">STRONG BUY (86%)</span>
+            </div>
+          </div>
+
+          <div class="chart-controls">
+            <label class="chk-label">
+              <input type="checkbox" id="toggleLevels" checked /> Entry / SL / TP Lines
+            </label>
+            <label class="chk-label">
+              <input type="checkbox" id="toggleEMA" checked /> EMA 21/50/200
+            </label>
+            <label class="chk-label">
+              <input type="checkbox" id="toggleBB" checked /> Bollinger Bands
+            </label>
+            <select id="subOscSelect" class="osc-select" aria-label="Sub-chart oscillator">
+              <option value="RSI">Oscillator: RSI (14)</option>
+              <option value="MACD">Oscillator: MACD (12,26,9)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="canvas-wrap">
+          <canvas id="mainSignalCanvas"></canvas>
+          <canvas id="subOscillatorCanvas"></canvas>
+        </div>
+
+        <div class="chart-legend-strip">
+          <span><i class="legend-dot" style="background:#38bdf8"></i>Entry Zone</span>
+          <span><i class="legend-dot" style="background:#f43f5e"></i>Exit Stop Loss (1.5x ATR)</span>
+          <span><i class="legend-dot" style="background:#2dd4bf"></i>Exit TP1 (1:1.5 R:R)</span>
+          <span><i class="legend-dot" style="background:#10b981"></i>Exit TP2 (1:2.5 R:R)</span>
+          <span><i class="legend-dot" style="background:#34d399"></i>Exit TP3 (1:4.0 R:R)</span>
+          <span><i class="legend-dot" style="background:#f59e0b"></i>EMA 21</span>
+          <span><i class="legend-dot" style="background:#38bdf8"></i>EMA 50</span>
+          <span><i class="legend-dot" style="background:#a855f7"></i>EMA 200</span>
+          <span style="margin-left:auto">Mouse wheel to zoom • Hover for candle OHLC</span>
+        </div>
+      </section>
+
+      <!-- LIVE MULTI-MARKET SCANNER TABLE -->
+      <section class="panel-card">
+        <div class="scanner-toolbar">
+          <div class="scanner-filters">
+            <button class="sig-filter-btn active" data-filter="ALL" type="button">All Signals</button>
+            <button class="sig-filter-btn" data-filter="BUY" type="button">Buy Only</button>
+            <button class="sig-filter-btn" data-filter="SELL" type="button">Sell Only</button>
+            <button class="sig-filter-btn" data-filter="STRONG" type="button">High Confidence ≥78%</button>
+            <button class="sig-filter-btn" data-filter="WATCHLIST" type="button">★ Watchlist</button>
+            <span id="scannerResultCount" style="font-size:11.5px; color:var(--text-muted); margin-left:8px;"></span>
+          </div>
+
+          <input
+            type="search"
+            id="symbolSearchInput"
+            class="search-box"
+            placeholder="Search symbol (e.g. XAUUSD, V75, BOOM, BTC)..."
+          />
+        </div>
+
+        <div class="table-scroll">
+          <table class="scanner-table">
+            <thead>
+              <tr>
+                <th>★</th>
+                <th>MT5 Instrument</th>
+                <th>Live Price</th>
+                <th>Signal</th>
+                <th>Confluence</th>
+                <th>Entry Price</th>
+                <th>Exit Stop Loss</th>
+                <th>Exit TP1 (50%)</th>
+                <th>Exit TP2 (30%)</th>
+                <th>Exit TP3 (20%)</th>
+                <th>Oscillators</th>
+              </tr>
+            </thead>
+            <tbody id="scannerTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: SELECTED MT5 ENTRY & EXIT SIGNAL TICKET -->
+    <aside class="right-column">
+      <!-- SIGNAL TICKET CARD -->
+      <section class="panel-card">
+        <div class="ticket-header">
+          <div>
+            <div class="ticket-title">
+              MT5 Signal Ticket: <span id="ticketSymbolCode" class="mono">XAUUSDm</span>
+              <span class="cat-pill cat-forex" id="ticketTimeframe">M15</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-secondary);">Bid / Ask: <span id="valBidAsk" class="mono">--</span></div>
+          </div>
+          <span class="sig-badge strong-buy" id="ticketDirectionBadge">STRONG BUY</span>
+        </div>
+
+        <div class="ticket-body">
+          <!-- Confidence Bar -->
+          <div class="conf-meter-box">
+            <div class="conf-meter-row">
+              <span style="font-size:11.5px; color:var(--text-secondary);">Multi-Indicator Confluence Score</span>
+              <span class="mono" style="font-weight:700; color:#fff;" id="ticketConfidenceVal">86% Confluence</span>
+            </div>
+            <div class="conf-bar-bg" style="height:7px;">
+              <div class="conf-bar-fill" id="ticketConfidenceFill" style="width:86%; background:#10b981;"></div>
+            </div>
+          </div>
+
+          <!-- Entry & Exit Levels -->
+          <div class="levels-grid">
+            <div class="level-card entry-card">
+              <div class="lvl-meta">
+                <span class="lvl-title" style="color:var(--accent-cyan);">Market Entry Signal</span>
+                <span class="lvl-sub">Limit Pullback Entry: <b id="valLimitEntry" class="mono">--</b></span>
+              </div>
+              <div class="lvl-right">
+                <span class="lvl-price" id="valMarketEntry">--</span>
+                <button class="btn-copy-mini" data-copy-target="valMarketEntry" data-copy-label="Entry Price" type="button">Copy</button>
+              </div>
+            </div>
+
+            <div class="level-card sl-card">
+              <div class="lvl-meta">
+                <span class="lvl-title" style="color:#fb7185;">Exit Signal — Stop Loss (SL)</span>
+                <span class="lvl-sub" id="subStopLoss">1.5x ATR Invalidation Level</span>
+              </div>
+              <div class="lvl-right">
+                <span class="lvl-price" style="color:#fb7185;" id="valStopLoss">--</span>
+                <button class="btn-copy-mini" data-copy-target="valStopLoss" data-copy-label="Stop Loss" type="button">Copy</button>
+              </div>
+            </div>
+
+            <div class="level-card tp-card">
+              <div class="lvl-meta">
+                <span class="lvl-title" style="color:#2dd4bf;">Exit Signal — Take Profit 1 (TP1)</span>
+                <span class="lvl-sub" id="subTp1">1:1.5 R:R • Close 50% &amp; Move SL to BE</span>
+              </div>
+              <div class="lvl-right">
+                <span class="lvl-price" style="color:#2dd4bf;" id="valTp1">--</span>
+                <button class="btn-copy-mini" data-copy-target="valTp1" data-copy-label="TP1" type="button">Copy</button>
+              </div>
+            </div>
+
+            <div class="level-card tp-card">
+              <div class="lvl-meta">
+                <span class="lvl-title" style="color:#10b981;">Exit Signal — Take Profit 2 (TP2)</span>
+                <span class="lvl-sub" id="subTp2">1:2.5 R:R • Close 30% Position</span>
+              </div>
+              <div class="lvl-right">
+                <span class="lvl-price" style="color:#10b981;" id="valTp2">--</span>
+                <button class="btn-copy-mini" data-copy-target="valTp2" data-copy-label="TP2" type="button">Copy</button>
+              </div>
+            </div>
+
+            <div class="level-card tp-card">
+              <div class="lvl-meta">
+                <span class="lvl-title" style="color:#34d399;">Exit Signal — Take Profit 3 (TP3)</span>
+                <span class="lvl-sub" id="subTp3">1:4.0 R:R • Final 20% Runner Exit</span>
+              </div>
+              <div class="lvl-right">
+                <span class="lvl-price" style="color:#34d399;" id="valTp3">--</span>
+                <button class="btn-copy-mini" data-copy-target="valTp3" data-copy-label="TP3" type="button">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dynamic Exit Advisory Rule -->
+          <div class="exit-advisory-box urgency-active" id="exitAdvisoryBox">
+            <div style="font-weight:700; margin-bottom:2px; font-size:11px; text-transform:uppercase;">Live Exit Management Rule</div>
+            <div id="exitAdvisoryText">--</div>
+          </div>
+
+          <button class="btn-action btn-primary" id="btnCopyFullTicket" type="button" style="width:100%; padding:8px;">
+            📋 Copy Full MT5 Entry/SL/TP Signal Ticket
+          </button>
+
+          <!-- Multi-Timeframe Alignment -->
+          <div>
+            <div style="font-size:11px; font-weight:700; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase;">
+              Multi-Timeframe Trend Alignment (Click to Switch)
+            </div>
+            <div class="mtf-matrix-grid" id="mtfMatrixGrid"></div>
+          </div>
+
+          <!-- 5-Pillar Indicator Breakdown -->
+          <div>
+            <div style="font-size:11px; font-weight:700; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase;">
+              5-Pillar Indicator Confluence Breakdown
+            </div>
+            <div class="conf-pillar-list" id="confluenceBreakdownList"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MT5 POSITION SIZE & RISK CALCULATOR -->
+      <section class="panel-card">
+        <div class="ticket-header">
+          <div class="ticket-title">MT5 Lot Size &amp; Exit PnL Calculator</div>
+          <span style="font-size:11px; color:var(--text-secondary);">Read-Only Helper</span>
+        </div>
+        <div class="ticket-body">
+          <div class="calc-grid">
+            <div class="calc-field">
+              <label for="inputAccountBalance">Account Balance ($)</label>
+              <input type="number" id="inputAccountBalance" value="1000" min="10" step="50" />
+            </div>
+            <div class="calc-field">
+              <label for="inputRiskPercent">Risk Per Trade (%)</label>
+              <input type="number" id="inputRiskPercent" value="1.0" min="0.1" max="20" step="0.1" />
+            </div>
+          </div>
+          <div class="calc-results">
+            <div class="calc-stat">
+              <span>Recommended Lot</span>
+              <b id="calcLotSize" style="color:var(--accent-cyan);">0.10 Lots</b>
+            </div>
+            <div class="calc-stat">
+              <span>Risk at SL</span>
+              <b id="calcRiskUsd" style="color:#fb7185;">-$10.00</b>
+            </div>
+            <div class="calc-stat">
+              <span>Profit at TP1</span>
+              <b id="calcRewardTp1" style="color:#2dd4bf;">+$15.00</b>
+            </div>
+          </div>
+          <div class="calc-results" style="grid-template-columns: 1fr 1fr; margin-top:4px;">
+            <div class="calc-stat">
+              <span>Profit at TP2 (1:2.5)</span>
+              <b id="calcRewardTp2" style="color:#10b981;">+$25.00</b>
+            </div>
+            <div class="calc-stat">
+              <span>Profit at TP3 (1:4.0)</span>
+              <b id="calcRewardTp3" style="color:#34d399;">+$40.00</b>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- REAL-TIME HIGH-CONFLUENCE ALERTS FEED -->
+      <section class="panel-card">
+        <div class="ticket-header">
+          <div class="ticket-title">⚡ Recent High-Confluence Signal Alerts</div>
+        </div>
+        <div class="alerts-list" id="liveAlertsFeed"></div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- ADD CUSTOM MT5 SYMBOL MODAL -->
+  <div class="modal-backdrop hidden" id="customSymbolModal">
+    <div class="modal-card">
+      <h3>Add Custom MetaTrader 5 Symbol</h3>
+      <form id="customSymbolForm">
+        <div class="form-row">
+          <label for="customSymCode">MT5 Symbol Ticker (e.g. GBPNZD, VOL150, PEPEUSD)</label>
+          <input type="text" id="customSymCode" required placeholder="GBPNZD" />
+        </div>
+        <div class="form-row">
+          <label for="customSymName">Instrument Description</label>
+          <input type="text" id="customSymName" placeholder="Great Britain Pound vs New Zealand Dollar" />
+        </div>
+        <div class="form-row">
+          <label for="customSymCat">Asset Category</label>
+          <select id="customSymCat">
+            <option value="forex">Forex</option>
+            <option value="commodities">Commodities</option>
+            <option value="synthetic">Synthetic Indices</option>
+            <option value="crypto">Crypto</option>
+            <option value="indices">Stock Indices</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="customSymPrice">Current Reference Price on MT5</label>
+          <input type="number" id="customSymPrice" step="any" required placeholder="2.1450" />
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+          <button type="button" class="btn-action" id="btnCloseCustomModal">Cancel</button>
+          <button type="submit" class="btn-action btn-primary">Add &amp; Generate Signals</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/js/symbols.js"></script>
+  <script src="/js/indicators.js"></script>
+  <script src="/js/dataFeed.js"></script>
+  <script src="/js/chart.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

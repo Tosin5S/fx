@@ -1,0 +1,13 @@
+{
+  "name": "mt5-omnisignal-webapp",
+  "version": "1.0.0",
+  "description": "Real-time Entry & Exit Signal WebApp for all MetaTrader 5 markets: Forex, Commodities, Synthetic Indices, Crypto, and Stock Indices",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
